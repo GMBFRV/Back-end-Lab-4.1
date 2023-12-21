@@ -1,18 +1,28 @@
 import os
 from flask import Flask, request, jsonify
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required
 from flask_migrate import Migrate
+from flask_restful import Api
 from marshmallow import Schema, fields, validate, ValidationError
 from flask_sqlalchemy import SQLAlchemy
+from passlib.handlers.pbkdf2 import pbkdf2_sha256
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://user:l4N7328CpBRRlEq9o0tEjvZRkSTWhAY0@dpg-clsl98gcmk4c73cbclt0-a.oregon-postgres.render.com/lab3db_95dp'
+app.config[
+     'SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:12345@localhost:5432/Lab4'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+os.environ["JWT_SECRET_KEY"] = "283129114377609256790918969598140128636"
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
+api = Api(app)
+jwt = JWTManager(app)
+
 
 class User(db.Model):
     user_id = db.Column(db.String, primary_key=True)
     user_name = db.Column(db.String, nullable=False)
+    user_password = db.Column(db.String, nullable=False)
 
 
 class Category(db.Model):
@@ -33,6 +43,7 @@ class Record(db.Model):
 class UserSchema(Schema):
     user_name = fields.String(required=True)
     user_id = fields.String(required=True)
+    user_password = fields.String(required=True)
 
 
 class CategorySchema(Schema):
@@ -50,17 +61,49 @@ class RecordSchema(Schema):
     cost = fields.String(required=True)
 
 
-
 user_schema = UserSchema()
 category_schema = CategorySchema()
 record_schema = RecordSchema()
 
 
-
 @app.route('/')
 def hello_world():
-    return 'This is Lab-work #3'
+    return 'This is Lab-work #4'
 
+
+@app.route('/register', methods=['POST'])
+def register_user():
+    try:
+        user_data = user_schema.load(request.get_json())
+    except ValidationError as err:
+        return jsonify({'error': err.messages}), 400
+
+    existing_user = User.query.filter_by(user_name=user_data['user_name']).first()
+    if existing_user:
+        return jsonify({'error': 'User with this username already exists'}), 409
+
+    hashed_password = pbkdf2_sha256.hash(user_data['user_password'])
+    new_user = User(user_name=user_data['user_name'], user_password=hashed_password, user_id=user_data['user_id'])
+
+    db.session.add(new_user)
+    db.session.commit()
+
+    return jsonify({'message': 'User created!'}), 201
+
+# Логін користувача
+@app.route('/login', methods=['POST'])
+def login_user():
+    try:
+        user_data = user_schema.load(request.get_json())
+    except ValidationError as err:
+        return jsonify({'error': err.messages}), 400
+
+    user = User.query.filter_by(user_name=user_data['user_name']).first()
+    if not user or not pbkdf2_sha256.verify(user_data['user_password'], user.user_password):
+        return jsonify({'error': 'Invalid username or password'}), 401
+
+    access_token = create_access_token(identity=user.user_id)
+    return jsonify(access_token=access_token), 200
 
 # Пользователи
 @app.route('/user', methods=['POST'])
@@ -101,6 +144,7 @@ def delete_user(user_id):
 
 # Категории
 @app.route('/category', methods=['POST'])
+@jwt_required()
 def create_category():
     try:
         category_data = category_schema.load(request.get_json())
@@ -117,6 +161,7 @@ def create_category():
 
 
 @app.route('/categories', methods=['GET'])
+@jwt_required()
 def get_categories():
     try:
         categories = Category.query.all()
@@ -128,6 +173,7 @@ def get_categories():
 
 
 @app.route('/category/<category_id>', methods=['GET'])
+@jwt_required()
 def get_category(category_id):
     category = Category.query.get(category_id)
     if category:
@@ -136,6 +182,7 @@ def get_category(category_id):
 
 
 @app.route('/category/<category_id>', methods=['DELETE'])
+@jwt_required()
 def delete_category(category_id):
     category = Category.query.get(category_id)
     if category:
@@ -147,6 +194,7 @@ def delete_category(category_id):
 
 # Записи
 @app.route('/record', methods=['POST'])
+@jwt_required()
 def create_record():
     try:
         record_data = record_schema.load(request.get_json())
@@ -177,6 +225,7 @@ def create_record():
 
 
 @app.route('/records', methods=['GET'])
+@jwt_required()
 def get_records():
     user_id = request.args.get('user_id')
     category_id = request.args.get('category_id')
@@ -194,6 +243,7 @@ def get_records():
 
 
 @app.route('/record/<record_id>', methods=['DELETE'])
+@jwt_required()
 def delete_record(record_id):
     record = Record.query.get(record_id)
     if record:
@@ -201,6 +251,7 @@ def delete_record(record_id):
         db.session.commit()
         return jsonify({'message': 'Record deleted successfully'})
     return jsonify({'error': 'Record not found'}), 404
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))
